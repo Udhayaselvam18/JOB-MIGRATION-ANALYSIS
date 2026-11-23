@@ -1,0 +1,310 @@
+import pandas as pd
+import numpy as np
+import joblib
+import os
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.metrics import accuracy_score, classification_report, log_loss
+from imblearn.over_sampling import RandomOverSampler
+
+# ✅ Correct file path
+file_path = "/migration_dataset_5000.csv"
+df = pd.read_csv(file_path)
+
+# Drop missing values
+df.dropna(inplace=True)
+
+# ✅ Target variable = Destination_Country
+target_column = "Destination_Country"
+
+# Separate target first
+y = df[target_column]
+X = df.drop(columns=[target_column])
+
+# Encode categorical features
+label_encoders = {}
+for col in X.select_dtypes(include=['object']).columns:
+    le = LabelEncoder()
+    X[col] = le.fit_transform(X[col])
+    label_encoders[col] = le
+
+# Encode target separately
+target_encoder = LabelEncoder()
+y = target_encoder.fit_transform(y)
+
+# Balance classes
+ros = RandomOverSampler(random_state=42)
+X_resampled, y_resampled = ros.fit_resample(X, y)
+
+# Train test split
+X_train, X_test, y_train, y_test = train_test_split(
+    X_resampled, y_resampled, test_size=0.2, random_state=42
+)
+
+# Scale features
+scaler = StandardScaler()
+X_train = scaler.fit_transform(X_train)
+X_test = scaler.transform(X_test)
+
+# Models
+models = {
+    "Random Forest": RandomForestClassifier(n_estimators=200, random_state=42),
+    "Gradient Boosting": GradientBoostingClassifier(n_estimators=200, random_state=42),
+    "Logistic Regression": LogisticRegression(max_iter=500),
+    "SVM": SVC(kernel='linear', probability=True)
+}
+
+best_model = None
+best_accuracy = 0
+best_trained_model = None
+
+print("Model Accuracies:\n")
+
+for name, model in models.items():
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    acc = accuracy_score(y_test, y_pred)
+    print(f"{name}: {acc:.4f}")
+
+    if acc > best_accuracy:
+        best_accuracy = acc
+        best_model = name
+        best_trained_model = model
+
+print(f"\nBest Model: {best_model} ({best_accuracy:.4f})")
+
+# Detailed metrics
+print("\nDetailed Metrics:\n")
+
+for name, model in models.items():
+    y_pred = model.predict(X_test)
+    y_proba = model.predict_proba(X_test)
+
+    report = classification_report(y_test, y_pred)
+    loss = log_loss(y_test, y_proba)
+
+    print(f"\n{name}")
+    print(report)
+    print(f"Log Loss: {loss:.4f}")
+
+# Create the directory if it doesn't exist
+os.makedirs("/content/", exist_ok=True)
+
+# ✅ Save best model
+joblib.dump({
+    "model": best_trained_model,
+    "scaler": scaler,
+    "target_encoder": target_encoder,
+    "feature_encoders": label_encoders,
+    "feature_names": X.columns.tolist()
+}, "/content/best_migration_model.pkl")
+
+print("\nModel saved as best_migration_model.pkl")
+
+# ✅ Decode predictions
+y_pred = best_trained_model.predict(X_test)
+decoded = target_encoder.inverse_transform(y_pred)
+
+pred_df = pd.DataFrame(decoded, columns=["Predicted_Destination_Country"])
+top_countries = pred_df["Predicted_Destination_Country"].value_counts().reset_index()
+top_countries.columns = ["Country", "Predicted_Migrants"]
+
+top_countries.to_csv("/content/future_migration_predictions.csv", index=False)
+print("Predictions saved as future_migration_predictions.csv")
+import pandas as pd
+import joblib  # To load the trained model
+
+# Load the migration predictions
+predictions_df = pd.read_csv("/content/future_migration_predictions.csv")
+
+# Get the top country with the highest predicted migrants
+top_country = predictions_df.iloc[0]["Country"]
+
+# Load the trained Random Forest model along with feature names
+model_data = joblib.load("/content/best_migration_model.pkl")  # Corrected filename
+rf_model = model_data["model"]
+feature_names = model_data["feature_names"]  # Load feature names
+
+# Get feature importance
+feature_importance = pd.DataFrame({
+    'Feature': feature_names,  # Use saved feature names
+    'Importance': rf_model.feature_importances_
+}).sort_values(by='Importance', ascending=False)
+
+# Get the top reason for migration
+top_reason = feature_importance.iloc[0]
+
+print(f"The top predicted country for migration is: {top_country}")
+print(f"The top reason for migration is: {top_reason['Feature']} with importance score: {top_reason['Importance']:.2f}")
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# Plot feature importance
+plt.figure(figsize=(10, 6))
+sns.barplot(x=feature_importance["Importance"], y=feature_importance["Feature"], palette="viridis")
+plt.xlabel("Importance Score")
+plt.ylabel("Feature")
+plt.title("Feature Importance in Migration Prediction")
+plt.show()
+# Load migration predictions
+plt.figure(figsize=(10, 6))
+sns.barplot(x=top_countries["Predicted_Migrants"], y=top_countries["Country"], palette="coolwarm")
+plt.xlabel("Number of Predicted Migrants")
+plt.ylabel("Country")
+plt.title("Top Predicted Migration Destinations")
+plt.show()
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+import matplotlib.pyplot as plt
+
+# Compute confusion matrix
+y_pred = best_trained_model.predict(X_test)
+cm = confusion_matrix(y_test, y_pred)
+
+# Plot confusion matrix
+plt.figure(figsize=(8, 6))
+disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=target_encoder.classes_)
+disp.plot(cmap="Blues", xticks_rotation=90)
+plt.title("Confusion Matrix")
+plt.show()
+# Collect accuracy scores from different models
+model_names = list(models.keys())
+accuracies = [accuracy_score(y_test, models[name].predict(X_test)) for name in model_names]
+
+# Plot model performance
+plt.figure(figsize=(8, 5))
+sns.barplot(x=accuracies, y=model_names, palette="magma")
+plt.xlabel("Accuracy Score")
+plt.ylabel("Model")
+plt.title("Comparison of Model Accuracies")
+plt.xlim(0, 1)
+plt.show()
+plt.figure(figsize=(8, 8))
+plt.pie(top_countries["Predicted_Migrants"], labels=top_countries["Country"], autopct="%1.1f%%", colors=sns.color_palette("pastel"))
+plt.title("Distribution of Predicted Migration Destinations")
+plt.show()
+import pandas as pd
+import joblib
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import LabelEncoder # Import LabelEncoder
+
+# ╣ 1‴ Load your dataset
+df = pd.read_csv("/migration_dataset_5000.csv")
+
+# ╣ 2‴ Remove the 'Year' and 'Name' columns as they are not needed for training
+df = df.drop(columns=["Year", "Name"], errors="ignore")
+
+# ╣ 3‴ Handle missing values
+df.dropna(inplace=True) # Dropping NaNs early
+
+# ╣ 4‴ Separate target first
+target_column = "Destination_Country"
+y = df[target_column]
+X = df.drop(columns=[target_column])
+
+# Encode categorical features in X
+label_encoders = {}
+for col in X.select_dtypes(include=['object']).columns:
+    le = LabelEncoder()
+    X[col] = le.fit_transform(X[col])
+    label_encoders[col] = le
+
+# Encode target separately
+target_encoder = LabelEncoder()
+y = target_encoder.fit_transform(y)
+
+# ╣ 5‴ Train-Test Split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+# ╣ 6‴ Train RandomForestClassifier
+rf_model = RandomForestClassifier(n_estimators=100, random_state=42)
+rf_model.fit(X_train, y_train)
+
+# ╣ 7‴ Save trained model
+model_data = {
+    "model": rf_model,
+    "features": list(X.columns),
+    "target_encoder": target_encoder, # save target encoder for inverse transform
+    "feature_encoders": label_encoders # save feature encoders
+}
+joblib.dump(model_data, "random_forest_retrained_model.pkl")
+
+print("✅ Model retrained and saved successfully!")
+!pip install gradio
+import gradio as gr
+import pandas as pd
+import joblib
+
+# Load trained model
+model_data = joblib.load("/content/random_forest_retrained_model.pkl")
+
+# Extract model and feature names
+rf_model = model_data["model"]
+feature_names = model_data["features"]  # Ensure correct feature names
+
+# Define categorical mappings
+categorical_mappings = {
+    "Skill Level": {"Low": 0, "Medium": 1, "High": 2},
+    "Job Sector": {"IT": 0, "Healthcare": 1, "Education": 2, "Finance": 3, "Hospitality" : 4, "Engineering" : 5},
+    "Cause of Migration": {"Better Job": 0, "Higer Salary": 1, "Education": 2, "Quality of Life": 3, "Remoter Work" : 4, "Political Stability" : 5, "Family" : 6}
+}
+
+# Define country mappings (output)
+country_mappings = {
+    0: "USA",
+    1: "Canada",
+    2: "Germany",
+}
+
+# Function to preprocess input and predict
+def predict_country(job_sector, skill_level, salary, cause_of_migration):
+    try:
+        # Convert categorical inputs to numerical values
+        job_sector = categorical_mappings["Job Sector"].get(job_sector, -1)
+        skill_level = categorical_mappings["Skill Level"].get(skill_level, -1)
+        cause_of_migration = categorical_mappings["Cause of Migration"].get(cause_of_migration, -1)
+
+        # Ensure valid category selection
+        if -1 in [job_sector, skill_level, cause_of_migration]:
+            return "Error: Invalid category selection"
+
+        # Create DataFrame for the model with correct feature names
+        user_input = pd.DataFrame([[job_sector, skill_level, salary, cause_of_migration]],
+                                  columns=feature_names)  # Ensure columns match trained model
+
+        # Make prediction
+        predicted_country_num = rf_model.predict(user_input)[0]
+
+        # Convert number to country name
+        predicted_country = country_mappings.get(predicted_country_num, "Unknown Country")
+
+        return f"Predicted Country: {predicted_country}"
+
+    except Exception as e:
+        return f"Error: {str(e)}"
+
+# Gradio UI
+with gr.Blocks() as demo:
+    gr.Markdown("# 🌍 Country Predictor")
+
+    job_sector_input = gr.Dropdown(choices=list(categorical_mappings["Job Sector"].keys()), label="Job Sector")
+    skill_level_input = gr.Dropdown(choices=list(categorical_mappings["Skill Level"].keys()), label="Skill Level")
+    salary_input = gr.Number(label="Avg Salary (USD)")
+    cause_of_migration_input = gr.Dropdown(choices=list(categorical_mappings["Cause of Migration"].keys()), label="Cause of Migration")
+
+    output_text = gr.Textbox(label="Predicted Country")
+
+    submit_btn = gr.Button("Predict")
+
+    submit_btn.click(
+        predict_country,
+        inputs=[job_sector_input, skill_level_input, salary_input, cause_of_migration_input],
+        outputs=output_text
+    )
+
+# Launch app
+demo.launch()
